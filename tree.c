@@ -105,7 +105,6 @@ static int write_tree_level(IndexEntry *entries, int count,
     while (i < count) {
         const char *full_path = entries[i].path;
 
-        // Skip entries not under this prefix
         if (prefix_len > 0 && strncmp(full_path, prefix, prefix_len) != 0) {
             i++; continue;
         }
@@ -114,7 +113,7 @@ static int write_tree_level(IndexEntry *entries, int count,
         const char *slash = strchr(rel_path, '/');
 
         if (!slash) {
-            // Direct file at this tree level
+            // Direct file at this level
             TreeEntry *e = &tree.entries[tree.count++];
             e->mode = entries[i].mode;
             e->hash = entries[i].hash;
@@ -122,22 +121,19 @@ static int write_tree_level(IndexEntry *entries, int count,
             e->name[sizeof(e->name) - 1] = '\0';
             i++;
         } else {
-            // Subdirectory — extract dir name and recurse
+            // Subdirectory
             char dir_name[256] = {0};
             size_t dir_len = slash - rel_path;
             memcpy(dir_name, rel_path, dir_len);
 
-            // Build new prefix for recursion: prefix + dir_name + "/"
             char new_prefix[512];
             snprintf(new_prefix, sizeof(new_prefix), "%s%s/", prefix, dir_name);
 
-            // Recurse to build subtree
             ObjectID sub_id;
             if (write_tree_level(entries, count, new_prefix, &sub_id) != 0)
                 return -1;
 
-            // Add subtree entry (only once per dir name)
-            // Check if we already added this dir
+            // Only add dir entry once
             int already = 0;
             for (int k = 0; k < tree.count; k++) {
                 if (strcmp(tree.entries[k].name, dir_name) == 0) {
@@ -151,11 +147,16 @@ static int write_tree_level(IndexEntry *entries, int count,
                 strncpy(e->name, dir_name, sizeof(e->name) - 1);
                 e->name[sizeof(e->name) - 1] = '\0';
             }
-
             i++;
         }
     }
 
-    (void)id_out;
-    return -1; // serialize in next commit
+    // Step 5: Serialize and write this tree level to the object store
+    void *tree_data;
+    size_t tree_len;
+    if (tree_serialize(&tree, &tree_data, &tree_len) != 0) return -1;
+
+    int ret = object_write(OBJ_TREE, tree_data, tree_len, id_out);
+    free(tree_data);
+    return ret;
 }
