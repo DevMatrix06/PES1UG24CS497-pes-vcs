@@ -109,11 +109,9 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 
 int object_read(const ObjectID *id, ObjectType *type_out,
                 void **data_out, size_t *len_out) {
-    // Step 1: Get file path
     char path[512];
     object_path(id, path, sizeof(path));
 
-    // Step 2: Read entire file into buffer
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
 
@@ -130,25 +128,33 @@ int object_read(const ObjectID *id, ObjectType *type_out,
     }
     fclose(f);
 
-    // Step 3: Integrity check
     ObjectID computed;
     compute_hash(buf, (size_t)file_size, &computed);
     if (memcmp(computed.hash, id->hash, HASH_SIZE) != 0) {
         free(buf); return -1;
     }
 
-    // Step 4: Find '\0' separating header from data
     uint8_t *null_ptr = memchr(buf, '\0', (size_t)file_size);
     if (!null_ptr) { free(buf); return -1; }
 
-    // Step 5: Parse type from header
     if (strncmp((char *)buf, "blob ", 5) == 0)        *type_out = OBJ_BLOB;
     else if (strncmp((char *)buf, "tree ", 5) == 0)   *type_out = OBJ_TREE;
     else if (strncmp((char *)buf, "commit ", 7) == 0) *type_out = OBJ_COMMIT;
     else { free(buf); return -1; }
 
-    // data extraction coming in next commit
-    (void)data_out; (void)len_out;
+    // Step 6: Extract and return data portion
+    uint8_t *data_start = null_ptr + 1;
+    size_t data_len = (size_t)file_size - (size_t)(data_start - buf);
+
+    uint8_t *out = malloc(data_len + 1);
+    if (!out) { free(buf); return -1; }
+
+    memcpy(out, data_start, data_len);
+    out[data_len] = '\0';
+
+    *data_out = out;
+    *len_out = data_len;
+
     free(buf);
-    return -1;
+    return 0;
 }

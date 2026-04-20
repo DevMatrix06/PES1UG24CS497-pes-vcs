@@ -1,135 +1,214 @@
-// tree.c — Tree object serialization and construction
-
-#include "tree.h"
 #include "index.h"
+#include "pes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <dirent.h>
 
-#define MODE_FILE 0100644
-#define MODE_EXEC 0100755
-#define MODE_DIR  0040000
+// ─── PROVIDED ────────────────────────────────────────────────────────────────
 
-uint32_t get_file_mode(const char *path) {
-    struct stat st;
-    if (lstat(path, &st) != 0) return 0;
-    if (S_ISDIR(st.st_mode)) return MODE_DIR;
-    if (st.st_mode & S_IXUSR) return MODE_EXEC;
-    return MODE_FILE;
-}
-
-int tree_parse(const void *data, size_t len, Tree *tree_out) {
-    tree_out->count = 0;
-    const uint8_t *ptr = (const uint8_t *)data;
-    const uint8_t *end = ptr + len;
-    while (ptr < end && tree_out->count < MAX_TREE_ENTRIES) {
-        TreeEntry *entry = &tree_out->entries[tree_out->count];
-        const uint8_t *space = memchr(ptr, ' ', end - ptr);
-        if (!space) return -1;
-        char mode_str[16] = {0};
-        size_t mode_len = space - ptr;
-        if (mode_len >= sizeof(mode_str)) return -1;
-        memcpy(mode_str, ptr, mode_len);
-        entry->mode = strtol(mode_str, NULL, 8);
-        ptr = space + 1;
-        const uint8_t *null_byte = memchr(ptr, '\0', end - ptr);
-        if (!null_byte) return -1;
-        size_t name_len = null_byte - ptr;
-        if (name_len >= sizeof(entry->name)) return -1;
-        memcpy(entry->name, ptr, name_len);
-        entry->name[name_len] = '\0';
-        ptr = null_byte + 1;
-        if (ptr + HASH_SIZE > end) return -1;
-        memcpy(entry->hash.hash, ptr, HASH_SIZE);
-        ptr += HASH_SIZE;
-        tree_out->count++;
+IndexEntry* index_find(Index *index, const char *path) {
+    for (int i = 0; i < index->count; i++) {
+        if (strcmp(index->entries[i].path, path) == 0)
+            return &index->entries[i];
     }
-    return 0;
+    return NULL;
 }
 
-static int compare_tree_entries(const void *a, const void *b) {
-    return strcmp(((const TreeEntry *)a)->name, ((const TreeEntry *)b)->name);
-}
-
-int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
-    size_t max_size = tree->count * 296;
-    uint8_t *buffer = malloc(max_size);
-    if (!buffer) return -1;
-    Tree sorted_tree = *tree;
-    qsort(sorted_tree.entries, sorted_tree.count, sizeof(TreeEntry), compare_tree_entries);
-    size_t offset = 0;
-    for (int i = 0; i < sorted_tree.count; i++) {
-        const TreeEntry *entry = &sorted_tree.entries[i];
-        int written = sprintf((char *)buffer + offset, "%o %s", entry->mode, entry->name);
-        offset += written + 1;
-        memcpy(buffer + offset, entry->hash.hash, HASH_SIZE);
-        offset += HASH_SIZE;
-    }
-    *data_out = buffer;
-    *len_out = offset;
-    return 0;
-}
-
-static int write_tree_level(IndexEntry *entries, int count,
-                             const char *prefix, ObjectID *id_out);
-
-int tree_from_index(ObjectID *id_out) {
-    Index idx;
-    if (index_load(&idx) != 0) return -1;
-    return write_tree_level(idx.entries, idx.count, "", id_out);
-}
-
-static int write_tree_level(IndexEntry *entries, int count,
-                              const char *prefix, ObjectID *id_out) {
-    Tree tree;
-    tree.count = 0;
-    size_t prefix_len = strlen(prefix);
-    int i = 0;
-    while (i < count) {
-        const char *full_path = entries[i].path;
-        if (prefix_len > 0 && strncmp(full_path, prefix, prefix_len) != 0) {
-            i++; continue;
+int index_remove(Index *index, const char *path) {
+    for (int i = 0; i < index->count; i++) {
+        if (strcmp(index->entries[i].path, path) == 0) {
+            int remaining = index->count - i - 1;
+            if (remaining > 0)
+                memmove(&index->entries[i], &index->entries[i + 1],
+                        remaining * sizeof(IndexEntry));
+            index->count--;
+            return index_save(index);
         }
-        const char *rel_path = full_path + prefix_len;
-        const char *slash = strchr(rel_path, '/');
-        if (!slash) {
-            TreeEntry *e = &tree.entries[tree.count++];
-            e->mode = entries[i].mode;
-            e->hash = entries[i].hash;
-            strncpy(e->name, rel_path, sizeof(e->name) - 1);
-            e->name[sizeof(e->name) - 1] = '\0';
-            i++;
-        } else {
-            char dir_name[256] = {0};
-            size_t dir_len = slash - rel_path;
-            memcpy(dir_name, rel_path, dir_len);
-            char new_prefix[512];
-            snprintf(new_prefix, sizeof(new_prefix), "%s%s/", prefix, dir_name);
-            ObjectID sub_id;
-            if (write_tree_level(entries, count, new_prefix, &sub_id) != 0)
-                return -1;
-            int already = 0;
-            for (int k = 0; k < tree.count; k++) {
-                if (strcmp(tree.entries[k].name, dir_name) == 0) {
-                    already = 1; break;
+    }
+    fprintf(stderr, "error: '%s' is not in the index\n", path);
+    return -1;
+}
+
+int index_status(const Index *index) {
+    printf("Staged changes:\n");
+    int staged_count = 0;
+
+    for (int i = 0; i < index->count; i++) {
+        printf("  staged:     %s\n", index->entries[i].path);
+        staged_count++;
+    }
+
+    if (staged_count == 0) printf("  (nothing to show)\n");
+    printf("\n");
+
+    printf("Unstaged changes:\n");
+    printf("  (nothing to show)\n\n");
+
+    printf("Untracked files:\n");
+
+    DIR *dir = opendir(".");
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+
+            if (strcmp(ent->d_name, ".") == 0 ||
+                strcmp(ent->d_name, "..") == 0 ||
+                strcmp(ent->d_name, ".pes") == 0 ||
+                strcmp(ent->d_name, "pes") == 0 ||
+                strstr(ent->d_name, ".o") != NULL)
+                continue;
+
+            int tracked = 0;
+            for (int i = 0; i < index->count; i++) {
+                if (strcmp(index->entries[i].path, ent->d_name) == 0) {
+                    tracked = 1;
+                    break;
                 }
             }
-            if (!already) {
-                TreeEntry *e = &tree.entries[tree.count++];
-                e->mode = MODE_DIR;
-                e->hash = sub_id;
-                strncpy(e->name, dir_name, sizeof(e->name) - 1);
-                e->name[sizeof(e->name) - 1] = '\0';
+
+            if (!tracked) {
+                printf("  untracked:  %s\n", ent->d_name);
             }
-            i++;
         }
+        closedir(dir);
     }
-    void *tree_data;
-    size_t tree_len;
-    if (tree_serialize(&tree, &tree_data, &tree_len) != 0) return -1;
-    int ret = object_write(OBJ_TREE, tree_data, tree_len, id_out);
-    free(tree_data);
-    return ret;
+
+    printf("\n");
+    return 0;
+}
+
+// ─── INTERNAL ────────────────────────────────────────────────────────────────
+
+static int compare_index_entries(const void *a, const void *b) {
+    return strcmp(((const IndexEntry *)a)->path,
+                  ((const IndexEntry *)b)->path);
+}
+
+// ─── LOAD ────────────────────────────────────────────────────────────────────
+
+int index_load(Index *index) {
+    index->count = 0;
+
+    FILE *f = fopen(".pes/index", "r");
+    if (!f) return 0;
+
+    char hex[65];
+
+    while (fscanf(f, "%o %64s %lu %u %[^\n]\n",
+                  &index->entries[index->count].mode,
+                  hex,
+                  &index->entries[index->count].mtime_sec,
+                  &index->entries[index->count].size,
+                  index->entries[index->count].path) == 5) {
+
+        hex_to_hash(hex, &index->entries[index->count].hash);
+        index->count++;
+    }
+
+    fclose(f);
+    return 0;
+}
+
+// ─── SAVE ────────────────────────────────────────────────────────────────────
+
+int index_save(const Index *index) {
+    Index *sorted = malloc(sizeof(Index));
+    if (!sorted) return -1;
+
+    *sorted = *index;
+
+    qsort(sorted->entries, sorted->count,
+          sizeof(IndexEntry), compare_index_entries);
+
+    FILE *f = fopen(".pes/index.tmp", "w");
+    if (!f) {
+        free(sorted);
+        return -1;
+    }
+
+    char hex[65];
+
+    for (int i = 0; i < sorted->count; i++) {
+        hash_to_hex(&sorted->entries[i].hash, hex);
+
+        fprintf(f, "%o %s %lu %u %s\n",
+                sorted->entries[i].mode,
+                hex,
+                sorted->entries[i].mtime_sec,
+                sorted->entries[i].size,
+                sorted->entries[i].path);
+    }
+
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    free(sorted);
+
+    rename(".pes/index.tmp", ".pes/index");
+    return 0;
+}
+
+// ─── ADD (CORRECT FOR YOUR OBJECT.C) ─────────────────────────────────────────
+
+int index_add(Index *index, const char *path) {
+    struct stat st;
+
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "error: invalid file '%s'\n", path);
+        return -1;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "error: cannot open '%s'\n", path);
+        return -1;
+    }
+
+    unsigned char *data = malloc(st.st_size);
+    if (!data) {
+        fclose(f);
+        return -1;
+    }
+
+    if (st.st_size > 0 &&
+        fread(data, 1, st.st_size, f) != (size_t)st.st_size) {
+        free(data);
+        fclose(f);
+        return -1;
+    }
+
+    fclose(f);
+
+    ObjectID hash;
+
+    // ✅ CORRECT CALL (THIS WAS YOUR BUG)
+    if (object_write(OBJ_BLOB, data, st.st_size, &hash) != 0) {
+        free(data);
+        fprintf(stderr, "error: object_write failed\n");
+        return -1;
+    }
+
+    free(data);
+
+    IndexEntry *entry = index_find(index, path);
+
+    if (!entry) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        entry = &index->entries[index->count++];
+    }
+
+    entry->mode = (st.st_mode & S_IXUSR) ? 0100755 : 0100644;
+    entry->hash = hash;
+    entry->mtime_sec = st.st_mtime;
+    entry->size = st.st_size;
+
+    strncpy(entry->path, path, sizeof(entry->path) - 1);
+    entry->path[sizeof(entry->path) - 1] = '\0';
+
+    return index_save(index);
 }

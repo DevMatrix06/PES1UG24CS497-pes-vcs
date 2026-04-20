@@ -176,13 +176,16 @@ int head_update(const ObjectID *new_commit) {
     return rename(tmp_path, target_path);
 }
 
-// ─── COMMIT 1 (ONLY BASIC STRUCTURE) ─────────────────────────────────────────
+// ─── COMMIT 2 ────────────────────────────────────────────────────────────────
 
 int commit_create(const char *message, ObjectID *commit_id_out) {
     (void)message;
     (void)commit_id_out;
 
-    printf("commit started\n");
+    Index index;
+    index_load(&index);
+
+    printf("Loaded index with %d entries\n", index.count);
 
     return 0;
 }
