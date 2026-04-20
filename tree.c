@@ -1,7 +1,6 @@
 // tree.c — Tree object serialization and construction
 
 #include "tree.h"
-#include "index.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,79 +83,9 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
     return 0;
 }
 
-// ─── TODO ────────────────────────────────────────────────────────────────────
-
-static int write_tree_level(IndexEntry *entries, int count,
-                             const char *prefix, ObjectID *id_out);
+// ─── tree_from_index (stub — fully implemented in Phase 3 with index.c) ─────
 
 int tree_from_index(ObjectID *id_out) {
-    Index idx;
-    if (index_load(&idx) != 0) return -1;
-    return write_tree_level(idx.entries, idx.count, "", id_out);
-}
-
-static int write_tree_level(IndexEntry *entries, int count,
-                              const char *prefix, ObjectID *id_out) {
-    Tree tree;
-    tree.count = 0;
-    size_t prefix_len = strlen(prefix);
-
-    int i = 0;
-    while (i < count) {
-        const char *full_path = entries[i].path;
-
-        if (prefix_len > 0 && strncmp(full_path, prefix, prefix_len) != 0) {
-            i++; continue;
-        }
-
-        const char *rel_path = full_path + prefix_len;
-        const char *slash = strchr(rel_path, '/');
-
-        if (!slash) {
-            // Direct file at this level
-            TreeEntry *e = &tree.entries[tree.count++];
-            e->mode = entries[i].mode;
-            e->hash = entries[i].hash;
-            strncpy(e->name, rel_path, sizeof(e->name) - 1);
-            e->name[sizeof(e->name) - 1] = '\0';
-            i++;
-        } else {
-            // Subdirectory
-            char dir_name[256] = {0};
-            size_t dir_len = slash - rel_path;
-            memcpy(dir_name, rel_path, dir_len);
-
-            char new_prefix[512];
-            snprintf(new_prefix, sizeof(new_prefix), "%s%s/", prefix, dir_name);
-
-            ObjectID sub_id;
-            if (write_tree_level(entries, count, new_prefix, &sub_id) != 0)
-                return -1;
-
-            // Only add dir entry once
-            int already = 0;
-            for (int k = 0; k < tree.count; k++) {
-                if (strcmp(tree.entries[k].name, dir_name) == 0) {
-                    already = 1; break;
-                }
-            }
-            if (!already) {
-                TreeEntry *e = &tree.entries[tree.count++];
-                e->mode = MODE_DIR;
-                e->hash = sub_id;
-                strncpy(e->name, dir_name, sizeof(e->name) - 1);
-                e->name[sizeof(e->name) - 1] = '\0';
-            }
-            i++;
-        }
-    }
-
-    // Step 5: Serialize and write this tree level to the object store
-    void *tree_data;
-    size_t tree_len;
-    if (tree_serialize(&tree, &tree_data, &tree_len) != 0) return -1;
-
-    int ret = object_write(OBJ_TREE, tree_data, tree_len, id_out);
-    free(tree_data);
-    return ret;
+    (void)id_out;
+    return -1;
 }
