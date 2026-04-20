@@ -177,7 +177,7 @@ int head_update(const ObjectID *new_commit) {
     return rename(tmp_path, target_path);
 }
 
-// ─── COMMIT 4 ────────────────────────────────────────────────────────────────
+// ─── COMMIT 5 (FINAL) ────────────────────────────────────────────────────────
 
 int commit_create(const char *message, ObjectID *commit_id_out) {
     Index index;
@@ -190,7 +190,6 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
     snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
     commit.timestamp = (uint64_t)time(NULL);
 
-    // serialize commit
     void *data;
     size_t len;
 
@@ -199,7 +198,6 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
         return -1;
     }
 
-    // store commit object
     if (object_write(OBJ_COMMIT, data, len, commit_id_out) != 0) {
         fprintf(stderr, "object_write failed\n");
         free(data);
@@ -208,7 +206,16 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
 
     free(data);
 
-    printf("Commit stored\n");
+    // ✅ update HEAD
+    if (head_update(commit_id_out) != 0) {
+        fprintf(stderr, "head update failed\n");
+        return -1;
+    }
+
+    // ✅ print commit hash
+    char hex[65];
+    hash_to_hex(commit_id_out, hex);
+    printf("Committed as %s\n", hex);
 
     return 0;
 }
