@@ -177,21 +177,38 @@ int head_update(const ObjectID *new_commit) {
     return rename(tmp_path, target_path);
 }
 
-// ─── COMMIT 3 ────────────────────────────────────────────────────────────────
+// ─── COMMIT 4 ────────────────────────────────────────────────────────────────
 
 int commit_create(const char *message, ObjectID *commit_id_out) {
     Index index;
     index_load(&index);
 
     Commit commit;
-
-    // temporary values
     memset(&commit, 0, sizeof(Commit));
+
     snprintf(commit.message, sizeof(commit.message), "%s", message);
     snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
     commit.timestamp = (uint64_t)time(NULL);
 
-    printf("Commit struct prepared\n");
+    // serialize commit
+    void *data;
+    size_t len;
+
+    if (commit_serialize(&commit, &data, &len) != 0) {
+        fprintf(stderr, "serialize failed\n");
+        return -1;
+    }
+
+    // store commit object
+    if (object_write(OBJ_COMMIT, data, len, commit_id_out) != 0) {
+        fprintf(stderr, "object_write failed\n");
+        free(data);
+        return -1;
+    }
+
+    free(data);
+
+    printf("Commit stored\n");
 
     return 0;
 }
