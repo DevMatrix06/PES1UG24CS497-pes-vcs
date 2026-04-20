@@ -3,6 +3,7 @@
 #include "commit.h"
 #include "index.h"
 #include "tree.h"
+#include "pes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -176,16 +177,21 @@ int head_update(const ObjectID *new_commit) {
     return rename(tmp_path, target_path);
 }
 
-// ─── COMMIT 2 ────────────────────────────────────────────────────────────────
+// ─── COMMIT 3 ────────────────────────────────────────────────────────────────
 
 int commit_create(const char *message, ObjectID *commit_id_out) {
-    (void)message;
-    (void)commit_id_out;
-
     Index index;
     index_load(&index);
 
-    printf("Loaded index with %d entries\n", index.count);
+    Commit commit;
+
+    // temporary values
+    memset(&commit, 0, sizeof(Commit));
+    snprintf(commit.message, sizeof(commit.message), "%s", message);
+    snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
+    commit.timestamp = (uint64_t)time(NULL);
+
+    printf("Commit struct prepared\n");
 
     return 0;
 }
