@@ -86,15 +86,12 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 
 // ─── TODO ────────────────────────────────────────────────────────────────────
 
-// Forward declaration
 static int write_tree_level(IndexEntry *entries, int count,
                              const char *prefix, ObjectID *id_out);
 
 int tree_from_index(ObjectID *id_out) {
     Index idx;
     if (index_load(&idx) != 0) return -1;
-
-    // Build tree from all index entries with empty prefix (root level)
     return write_tree_level(idx.entries, idx.count, "", id_out);
 }
 
@@ -106,31 +103,59 @@ static int write_tree_level(IndexEntry *entries, int count,
 
     int i = 0;
     while (i < count) {
-        const char *path = entries[i].path;
+        const char *full_path = entries[i].path;
 
-        // Strip prefix
-        if (prefix_len > 0) {
-            if (strncmp(path, prefix, prefix_len) != 0) { i++; continue; }
-            path = path + prefix_len;
+        // Skip entries not under this prefix
+        if (prefix_len > 0 && strncmp(full_path, prefix, prefix_len) != 0) {
+            i++; continue;
         }
 
-        // Find if this entry is a direct file or inside a subdir
-        const char *slash = strchr(path, '/');
+        const char *rel_path = full_path + prefix_len;
+        const char *slash = strchr(rel_path, '/');
 
         if (!slash) {
-            // Direct file at this level
+            // Direct file at this tree level
             TreeEntry *e = &tree.entries[tree.count++];
             e->mode = entries[i].mode;
             e->hash = entries[i].hash;
-            strncpy(e->name, path, sizeof(e->name) - 1);
+            strncpy(e->name, rel_path, sizeof(e->name) - 1);
             e->name[sizeof(e->name) - 1] = '\0';
             i++;
         } else {
-            // It's inside a subdirectory — will handle in next commit
+            // Subdirectory — extract dir name and recurse
+            char dir_name[256] = {0};
+            size_t dir_len = slash - rel_path;
+            memcpy(dir_name, rel_path, dir_len);
+
+            // Build new prefix for recursion: prefix + dir_name + "/"
+            char new_prefix[512];
+            snprintf(new_prefix, sizeof(new_prefix), "%s%s/", prefix, dir_name);
+
+            // Recurse to build subtree
+            ObjectID sub_id;
+            if (write_tree_level(entries, count, new_prefix, &sub_id) != 0)
+                return -1;
+
+            // Add subtree entry (only once per dir name)
+            // Check if we already added this dir
+            int already = 0;
+            for (int k = 0; k < tree.count; k++) {
+                if (strcmp(tree.entries[k].name, dir_name) == 0) {
+                    already = 1; break;
+                }
+            }
+            if (!already) {
+                TreeEntry *e = &tree.entries[tree.count++];
+                e->mode = MODE_DIR;
+                e->hash = sub_id;
+                strncpy(e->name, dir_name, sizeof(e->name) - 1);
+                e->name[sizeof(e->name) - 1] = '\0';
+            }
+
             i++;
         }
     }
 
     (void)id_out;
-    return -1; // not finished yet
+    return -1; // serialize in next commit
 }
