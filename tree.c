@@ -87,9 +87,24 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 // ─── TODO ────────────────────────────────────────────────────────────────────
 
 int tree_from_index(ObjectID *id_out) {
-    // Step 1: Load the index
     Index idx;
     if (index_load(&idx) != 0) return -1;
+
+    Tree root;
+    root.count = 0;
+
+    // Step 2: Add flat (root-level) files — those with no '/' in path
+    for (int i = 0; i < idx.count; i++) {
+        const char *path = idx.entries[i].path;
+        if (strchr(path, '/') == NULL) {
+            // Direct file at root level
+            TreeEntry *e = &root.entries[root.count++];
+            e->mode = idx.entries[i].mode;
+            e->hash = idx.entries[i].hash;
+            strncpy(e->name, path, sizeof(e->name) - 1);
+            e->name[sizeof(e->name) - 1] = '\0';
+        }
+    }
 
     (void)id_out;
     return -1; // not finished yet
