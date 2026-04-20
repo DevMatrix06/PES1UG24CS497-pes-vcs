@@ -50,13 +50,11 @@ int object_exists(const ObjectID *id) {
 // ─── object_write ────────────────────────────────────────────────────────────
 
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // Step 1: Determine type string
     const char *type_str;
     if (type == OBJ_BLOB)        type_str = "blob";
     else if (type == OBJ_TREE)   type_str = "tree";
     else                          type_str = "commit";
 
-    // Step 2: Build full object = header + '\0' + data
     char header[64];
     int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
 
@@ -68,17 +66,47 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     full[header_len] = '\0';
     memcpy(full + header_len + 1, data, len);
 
-    // Step 3: Compute SHA-256 of full object
     compute_hash(full, full_len, id_out);
 
-    // Step 4: Deduplication — skip if already stored
     if (object_exists(id_out)) {
         free(full);
         return 0;
     }
 
+    // Step 5: Create shard directory
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex);
+    char shard_dir[256];
+    snprintf(shard_dir, sizeof(shard_dir), "%s/%.2s", OBJECTS_DIR, hex);
+    mkdir(shard_dir, 0755);
+
+    // Step 6: Write to temp file
+    char final_path[512];
+    object_path(id_out, final_path, sizeof(final_path));
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", final_path);
+
+    int fd = open(tmp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) { free(full); return -1; }
+
+    ssize_t written = write(fd, full, full_len);
     free(full);
-    return -1; // not finished yet
+
+    if (written < 0 || (size_t)written != full_len) {
+        close(fd); unlink(tmp_path); return -1;
+    }
+
+    // Step 7: fsync + rename atomically
+    if (fsync(fd) < 0) { close(fd); unlink(tmp_path); return -1; }
+    close(fd);
+
+    if (rename(tmp_path, final_path) < 0) { unlink(tmp_path); return -1; }
+
+    // Step 8: fsync the shard directory
+    int dir_fd = open(shard_dir, O_RDONLY);
+    if (dir_fd >= 0) { fsync(dir_fd); close(dir_fd); }
+
+    return 0;
 }
 
 int object_read(const ObjectID *id, ObjectType *type_out,
