@@ -86,23 +86,48 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 
 // ─── TODO ────────────────────────────────────────────────────────────────────
 
+// Forward declaration
+static int write_tree_level(IndexEntry *entries, int count,
+                             const char *prefix, ObjectID *id_out);
+
 int tree_from_index(ObjectID *id_out) {
     Index idx;
     if (index_load(&idx) != 0) return -1;
 
-    Tree root;
-    root.count = 0;
+    // Build tree from all index entries with empty prefix (root level)
+    return write_tree_level(idx.entries, idx.count, "", id_out);
+}
 
-    // Step 2: Add flat (root-level) files — those with no '/' in path
-    for (int i = 0; i < idx.count; i++) {
-        const char *path = idx.entries[i].path;
-        if (strchr(path, '/') == NULL) {
-            // Direct file at root level
-            TreeEntry *e = &root.entries[root.count++];
-            e->mode = idx.entries[i].mode;
-            e->hash = idx.entries[i].hash;
+static int write_tree_level(IndexEntry *entries, int count,
+                              const char *prefix, ObjectID *id_out) {
+    Tree tree;
+    tree.count = 0;
+    size_t prefix_len = strlen(prefix);
+
+    int i = 0;
+    while (i < count) {
+        const char *path = entries[i].path;
+
+        // Strip prefix
+        if (prefix_len > 0) {
+            if (strncmp(path, prefix, prefix_len) != 0) { i++; continue; }
+            path = path + prefix_len;
+        }
+
+        // Find if this entry is a direct file or inside a subdir
+        const char *slash = strchr(path, '/');
+
+        if (!slash) {
+            // Direct file at this level
+            TreeEntry *e = &tree.entries[tree.count++];
+            e->mode = entries[i].mode;
+            e->hash = entries[i].hash;
             strncpy(e->name, path, sizeof(e->name) - 1);
             e->name[sizeof(e->name) - 1] = '\0';
+            i++;
+        } else {
+            // It's inside a subdirectory — will handle in next commit
+            i++;
         }
     }
 
